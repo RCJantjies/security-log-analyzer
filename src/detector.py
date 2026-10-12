@@ -1,6 +1,7 @@
 """Detect suspicious authentication patterns using explainable rules."""
 
-from collections import defaultdict
+from collections import defaultdict, deque
+from datetime import timedelta
 from typing import Any
 
 
@@ -20,8 +21,14 @@ def severity_for_failures(failed_attempts: int) -> tuple[int, str]:
     return 0, "NONE"
 
 
-def detect_suspicious_authentication(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Aggregate authentication events and return security findings."""
+def detect_suspicious_authentication(
+    records: list[dict[str, Any]], window_minutes: int = 10
+) -> list[dict[str, Any]]:
+    """Return authentication findings found within a sliding time window."""
+    if window_minutes <= 0:
+        raise ValueError("Window minutes must be greater than zero.")
+
+    window = timedelta(minutes=window_minutes)
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
 
     for record in records:
@@ -31,19 +38,24 @@ def detect_suspicious_authentication(records: list[dict[str, Any]]) -> list[dict
 
     for (user, source_ip), events in grouped.items():
         events = sorted(events, key=lambda event: event["timestamp"])
-        failed_attempts = sum(event["status"] == "FAILED" for event in events)
+        failure_times = deque()
+        failed_attempts = 0
+        success_after_failure = False
+
+        for event in events:
+            timestamp = event["timestamp"]
+            while failure_times and timestamp - failure_times[0] > window:
+                failure_times.popleft()
+
+            if event["status"] == "FAILED":
+                failure_times.append(timestamp)
+                failed_attempts = max(failed_attempts, len(failure_times))
+            elif event["status"] == "SUCCESS" and len(failure_times) >= 3:
+                success_after_failure = True
 
         base_score, severity = severity_for_failures(failed_attempts)
         if base_score == 0:
             continue
-
-        failure_seen = False
-        success_after_failure = False
-        for event in events:
-            if event["status"] == "FAILED":
-                failure_seen = True
-            elif event["status"] == "SUCCESS" and failure_seen:
-                success_after_failure = True
 
         risk_score = base_score
         reasons = [f"{failed_attempts} failed authentication attempts"]
