@@ -1,7 +1,7 @@
 """Parse and validate authentication log records."""
 
 import csv
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -11,7 +11,10 @@ VALID_STATUSES = {"SUCCESS", "FAILED"}
 def parse_timestamp(value: str) -> datetime:
     """Parse an ISO 8601 UTC timestamp from an authentication record."""
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("Timestamp must include timezone information.")
+        return parsed.astimezone(timezone.utc)
     except (AttributeError, ValueError) as exc:
         raise ValueError(f"Invalid timestamp: {value}") from exc
 
